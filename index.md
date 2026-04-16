@@ -1,3 +1,7 @@
+---
+layout: default
+---
+
 # Lord of the Cams
 
 ## Hardware Recon, PCAP Analysis, and RTSP Digest Cracking
