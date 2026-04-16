@@ -1,6 +1,6 @@
 # insomnihack-2026-lord-of-the-cams
 
-This repository documents my learning process while working through a hardware-focused challenge that started with a packet capture and ended on a physical camera appliance.
+This repo contains the files I used for a ctf challenge at insomnihack. The page talks about my learning process. This is a hardware/web challenge.
 
 ## Challenge Setup
 
@@ -10,9 +10,15 @@ The original description was:
 
 We were given a `.pcap` file and had to attack a physical box on-site. The key idea turned out to be combining traffic analysis with live recon against the device rather than treating them as separate problems.
 
+## Initial Steps
+
+At the start I was lazy, so I just dropped the pcap into claude and it told me the password was morder. For reference, I only have all free versions. Anyway I tried it on the device and it didn't work.
+
 ## What I Found On The Device
 
-Once connected to the camera appliance, I ran a full port scan:
+Because it's hardware, my first instinct was to connect to it.
+
+I connected and ran a full port scan:
 
 ```bash
 nmap -sV -p- 192.168.1.66 --open
@@ -29,53 +35,42 @@ Service Info: Device: webcam; CPE: cpe:/h:pelco:ide10dn
 
 Initial observations:
 
-- `554/tcp` was clearly the camera application's RTSP service.
-- `9000/tcp` was open but not immediately identifiable.
-- The username visible during analysis was `Sauron`.
+- camera application running at port 554
+- full port scan revealed port 9000, unknown service
+- The username is `Sauron`
 
-At this stage, the camera stream endpoint looked more promising than blind probing of the unknown service.
+After this, I tried to hack into the services because I thought there were vulnerabilities inside. I also clauded on the device for a while and nothing work. In the end I thought the pcap was a red herring.
 
-## What The PCAP Was Telling Me
+## Going back to the PCAP the old fashioned way
 
-The packet capture contained the useful part of the puzzle, but it was buried under a lot of protocol noise. I used AI to help strip away packet-header clutter and make the important application-layer values easier to read.
+Anyway, I decided to look at the pcap manually in the end. I opened wireshark and there was a lot of protocol noise. I used AI to help strip away packet-header clutter and make the important application-layer values easier to read + fact check with wireshark.
 
-That made the relevant RTSP exchange much clearer:
+Anyway here are some responses I got from the devices.
 
 ```text
 DESCRIBE rtsp://192.168.1.66:554/h265Preview_01_main RTSP/1.0
 Authorization: Digest username="Sauron", realm="BC Streaming Media", nonce="729612ffe9910096bdf06cf1f14191b7", uri="/h265Preview_01_main", response="<hash>"
-```
 
-And when replaying the request format manually, the device answered:
-
-```text
 RTSP/1.0 401 Unauthorized
 WWW-Authenticate: Digest realm="BC Streaming Media", nonce="dd254a1bf54837d77c191359850451cf"
 ```
 
-This was the turning point. I initially went down the wrong path and treated it like a normal password guessing problem. I spent time considering obvious themed passwords such as `mordor`, but the real lesson was that RTSP here was using HTTP Digest-style authentication with an MD5-based response.
+IDK what changed but after a while I realised/remembered MD5 is easy to crack offline, then combined with realising RTSP got its own authentication.
 
-## The Important Learning: This Was An Offline Crack
+## This Is An Offline Crack
 
-The breakthrough was realizing that I did **not** need to brute-force the service interactively.
+I stopped brute-forcing the service.
 
-For this RTSP digest flow, the server gives enough information to verify password guesses offline. In the simplified form used here, the response is:
+I went to search up how RTSP digest authentication works, something like:
 
 ```text
 response = MD5( MD5(username:realm:password) : nonce : MD5(method:uri) )
 ```
 
-That changes the attack completely:
-
-- no repeated online guesses against the camera
-- no lockout/noise on the target service
-- just calculate candidate hashes locally and compare them against the observed digest
-
-Once I understood that, the `.pcap` stopped being "just traffic" and became a credential artifact.
 
 ## Building `crack_rtsp.py`
 
-To test password candidates offline, I had Claude generate a small helper script, `crack_rtsp.py`, that:
+I got Claude generate a small helper script, `crack_rtsp.py`, that:
 
 1. takes the RTSP digest components extracted from the capture
 2. computes the fixed `HA2 = MD5(method:uri)`
@@ -83,30 +78,20 @@ To test password candidates offline, I had Claude generate a small helper script
 4. computes `HA1 = MD5(username:realm:password)`
 5. compares the final MD5 digest with the captured `response`
 
-I used `rockyou.txt` because it is a standard wordlist I already knew from OSCP prep and earlier practice.
+I used `rockyou.txt` because it is a standard wordlist I use from OSCP.
 
-The value of the script was not sophistication. It was speed: once the auth scheme was understood correctly, a short script was enough to validate the idea and move forward.
+Then I got the password and got the flag by authenticating RTSP using VLC.
 
-## Why This Was A Good Lesson
+## What I learnt
 
-This challenge reinforced a few things for me:
-
-- Traffic captures can contain reusable authentication material, not just network metadata.
-- Understanding the protocol beats guessing. I lost time thinking in terms of "what is the password?" instead of "how is the password verified?"
-- AI was useful here as a parsing and clarity aid. It helped extract the signal from noisy packet data, but the important step was still understanding the digest workflow.
-- Wordlists are only effective when paired with the correct verification model. `rockyou.txt` only became useful after the authentication math was clear.
-
-## Notes For Future Improvement
-
-This repository is the start of a cleaner write-up. Good next additions would be:
-
-- a sanitized walk-through of the exact fields extracted from the `.pcap`
-- a short explanation of why the unknown service on `9000/tcp` was deprioritized
-- a redacted example showing how to compute the digest step by step
-- the final post-authentication path on the physical box, if I decide to document that too
+- My free AI versions is not good enough, can't one shot everything.
+- Must still use brain.
+- Relook closely previous material you thought was a red herring.
+- Learning about RTSP and digest.
+- Use AI for small tasks like creating helper files and parsing files for clarity, don't expect it to do everything/higher level thinking (for now).
 
 ## Files In This Repo
 
-- `OneDoesNotSimplyWalk-48c3e186bf748c94b9ae6ce8768479d0e42b71e556c760869c7c61fade2aafc1.pcap`: original packet capture
+- `OneDoesNotSimplyWalk-48c3e186bf748c94b9ae6ce8768479d0e42b71e556c760869c7c61fade2aafc1.pcap`: original packet capture from CTF description
 - `crack_rtsp.py`: offline RTSP digest dictionary attack helper
 - `rockyou.txt`: wordlist used during testing
